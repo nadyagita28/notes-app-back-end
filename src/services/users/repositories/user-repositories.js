@@ -62,6 +62,16 @@ class UserRepositories {
     }
     return id;
   }
+
+  async getUsersByUsername(username) {
+    const query = {
+      text: 'SELECT id, username, fullname FROM users WHERE usernameLIKE $1',
+      values: [`%${username}%`],
+    };
+
+    const result = await this.pool.query(query);
+    return result.rows;
+  }
 }
 
 export default new UserRepositories();
