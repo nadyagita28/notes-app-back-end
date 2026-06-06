@@ -1,11 +1,13 @@
 import { nanoid } from 'nanoid';
 import { Pool } from 'pg';
 import collaborationRepositories from '../../collaborations/repositories/collaboration-repositories.js';
+import CacheService from '../../../cache/redis-service.js';
 
 class NoteRepositories {
   constructor() {
     this.pool = new Pool();
     this.collaborationRepositories = collaborationRepositories;
+    this.cacheService = new CacheService();
   }
 
   async createNote({ title, body, tags, owner }) {
@@ -20,21 +22,34 @@ class NoteRepositories {
 
     const result = await this.pool.query(query);
 
+    await this.cacheService.delete(`notes:${owner}`);
+
     return result.rows[0];
   }
 
   async getAllNotes(owner) {
-    const query = {
-      text: `SELECT notes.* FROM notes
-      LEFT JOIN collaboration ON collaborations.note_id = notes.id
-      WHERE notes.owner = $1 OR collaborations.user_id = $1
-      GROUP BY notes.id`,
-      values: [owner],
-    };
+    const cacheKey = `notes:${owner}`;
 
-    const result = await this.pool.query(query);
+    try {
+      const notes = await this.cacheService.get(cacheKey);
+      return JSON.parse(notes);
+    } catch (error) {
+      //cache miss, get from database
+      const query = {
+        text: `SELECT notes.* FROM notes
+       LEFT JOIN collaborations ON collaborations.note_id = notes.id
+       WHERE notes.owner = $1 OR collaborations.user_id = $1
+       GROUP BY notes.id`,
+        values: [owner],
+      };
 
-    return result.rows;
+      const result = await this.pool.query(query);
+
+      //save to cache
+      await this.cacheService.set(cacheKey, JSON.stringify(result.rows));
+
+      return result.rows;
+    }
   }
 
   async getNoteById(id) {
@@ -61,6 +76,11 @@ class NoteRepositories {
 
     const result = await this.pool.query(query);
 
+    const owner = result.rows[0].owner;
+    if (result.rows[0]) {
+      await this.cacheService.delete(`notes:${owner}`);
+    }
+
     return result.rows[0];
   }
 
@@ -72,8 +92,10 @@ class NoteRepositories {
 
     const result = await this.pool.query(query);
 
-    if (result.rows.length === 0) {
-      return null;
+    const owner = result.rows[0].owner;
+
+    if (result.rows === 0) {
+      await this.cacheService.delete(`notes:${owner}`);
     }
 
     return result.rows[0].id;
